@@ -9,6 +9,7 @@ import pytest
 import pyvista
 from pyvista import examples
 from pyvista.plotting import charts, system_supports_plotting
+from pyvista.plotting.colors import COLOR_SCHEMES
 from pyvista.utilities.misc import can_create_mpl_figure
 
 skip_mac = pytest.mark.skipif(
@@ -39,6 +40,25 @@ def to_vtk_scientific(val):
     return (
         parts[0] + "e" + sign + exp if exp != "" else parts[0]
     )  # Remove exponent altogether if it is 0
+
+
+class PlotterChanged:
+    """Helper class to check whether the plotter's rendered content has changed
+    since the last call."""
+
+    def __init__(self, plotter):
+        self._plotter = plotter
+        self._prev = self._capture()
+
+    def _capture(self):
+        self._plotter.show(auto_close=False)
+        return self._plotter.screenshot()
+
+    def __call__(self):
+        cur = self._capture()
+        changed = pyvista.compare_images(self._prev, cur) > 0
+        self._prev = cur
+        return changed
 
 
 @pytest.fixture
@@ -503,7 +523,7 @@ def test_multicomp_plot_common(plot_f, request):
 
     plot.color_scheme = cs
     assert plot.color_scheme == cs
-    assert plot._color_series.GetColorScheme() == plot.COLOR_SCHEMES[cs]["id"]
+    assert plot._color_series.GetColorScheme() == COLOR_SCHEMES[cs]["id"]
     assert all(pc == cs for pc, cs in zip(plot.colors, cs_colors))
     series_colors = [
         pyvista.Color(plot._color_series.GetColor(i)).float_rgba for i in range(len(cs_colors))
@@ -970,6 +990,36 @@ def test_chart_mpl(pl, chart_mpl):
 
 
 @skip_no_plotting
+@skip_no_mpl_figure
+def test_chart_mpl_update(pl):
+    import matplotlib.pyplot as plt
+
+    # Create simple chart
+    x0, y0, y1 = [0, 1, 2], [2, 1, 3], [-1, 0, 2]
+    f, ax = plt.subplots()
+    line = ax.plot(x0, y0)[0]
+    chart = pyvista.ChartMPL(f, redraw_on_render=False)
+    pl.add_chart(chart)
+    pl_changed = PlotterChanged(pl)
+
+    # Update matplotlib figure without redraw_on_update
+    line.set_ydata(y1)
+    # No changes when pl.render() is called (as redraw_on_render is False)
+    pl.render()
+    assert not pl_changed()
+    # Changes when figure is explicitly redrawn:
+    f.canvas.draw()
+    assert pl_changed()
+
+    # Update matplotlib figure with redraw_on_render
+    chart.redraw_on_render = True
+    line.set_ydata(y0)
+    # Changes when pl.render() is called (as redraw_on_render is True now)
+    pl.render()
+    assert pl_changed()
+
+
+@skip_no_plotting
 def test_charts(pl):
     win_size = pl.window_size
     top_left = pyvista.Chart2D(size=(0.5, 0.5), loc=(0, 0.5))
@@ -977,38 +1027,43 @@ def test_charts(pl):
 
     # Test add_chart
     pl.add_chart(top_left)
-    assert pl.renderers[0].__this__ == top_left._renderer.__this__
-    assert pl.renderers[0]._charts._scene.__this__ == top_left._scene.__this__
+    assert pl.renderer.__this__ == top_left._renderer.__this__
+    assert pl.renderer._charts._scene.__this__ == top_left._scene.__this__
     pl.add_chart(bottom_right)
-    assert len(pl.renderers[0]._charts) == 2
+    assert len(pl.renderer._charts) == 2
 
     # Test toggle_interaction
     pl.show(auto_close=False)  # We need to plot once to let the charts compute their true geometry
     assert not top_left.GetInteractive()
     assert not bottom_right.GetInteractive()
     assert (
-        pl.renderers[0]._charts.toggle_interaction((0.75 * win_size[0], 0.25 * win_size[1]))
+        pl.renderer._charts.toggle_interaction((0.75 * win_size[0], 0.25 * win_size[1]))
         is bottom_right._scene
     )
     assert not top_left.GetInteractive()
     assert bottom_right.GetInteractive()
-    assert pl.renderers[0]._charts.toggle_interaction((0, 0)) is None
+    assert pl.renderer._charts.toggle_interaction((0, 0)) is None
     assert not top_left.GetInteractive()
     assert not bottom_right.GetInteractive()
 
     # Test remove_chart
     pl.remove_chart(1)
-    assert len(pl.renderers[0]._charts) == 1
-    assert pl.renderers[0]._charts[0] == top_left
-    assert top_left in pl.renderers[0]._charts
+    assert len(pl.renderer._charts) == 1
+    assert pl.renderer._charts[0] == top_left
+    assert top_left in pl.renderer._charts
     pl.remove_chart(top_left)
-    assert len(pl.renderers[0]._charts) == 0
+    assert len(pl.renderer._charts) == 0
 
     # Test deep_clean
     pl.add_chart(top_left, bottom_right)
     pl.deep_clean()
-    assert len(pl.renderers[0]._charts) == 0
-    assert pl.renderers[0]._charts._scene is None
+    assert len(pl.renderer._charts) == 0
+    assert pl.renderer._charts._scene is None
+
+    pl.add_chart(top_left, bottom_right)
+    pl.clear()  # also calls deep_clean()
+    assert len(pl.renderer._charts) == 0
+    assert pl.renderer._charts._scene is None
 
 
 @skip_no_plotting
