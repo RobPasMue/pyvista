@@ -13,6 +13,7 @@ import time
 
 from PIL import Image
 import imageio
+import matplotlib
 import numpy as np
 import pytest
 import vtk
@@ -50,7 +51,7 @@ def using_mesa():
     """Determine if using mesa."""
     pl = pyvista.Plotter(notebook=False, off_screen=True)
     pl.show(auto_close=False)
-    gpu_info = pl.ren_win.ReportCapabilities()
+    gpu_info = pl.render_window.ReportCapabilities()
     pl.close()
 
     regex = re.compile("OpenGL version string:(.+)\n")
@@ -2491,8 +2492,12 @@ def test_add_text():
 
 
 @pytest.mark.skipif(
-    not vtk.vtkMathTextFreeTypeTextRenderer().MathTextIsSupported(),
-    reason='Math text is not supported.',
+    not vtk.vtkMathTextFreeTypeTextRenderer().MathTextIsSupported()
+    or (
+        tuple(map(int, matplotlib.__version__.split('.')[:2])) >= (3, 6)
+        and pyvista.vtk_version_info <= (9, 2, 2)
+    ),
+    reason='VTK and Matplotlib version incompatibility. For VTK<=9.2.2, MathText requires matplotlib<3.6',
 )
 def test_add_text_latex():
     """Test LaTeX symbols.
@@ -3315,6 +3320,28 @@ def test_add_ids_algorithm():
     assert 'cell_ids' in result.cell_data
 
 
+@skip_windows_mesa
+def test_plot_volume_rgba(uniform):
+    with pytest.raises(ValueError, match='dimensions'):
+        uniform.plot(volume=True, scalars=np.empty((uniform.n_points, 1, 1)))
+
+    scalars = uniform.points - (uniform.origin)
+    scalars /= scalars.max()
+    scalars = np.hstack((scalars, scalars[::-1, -1].reshape(-1, 1) ** 2))
+    scalars *= 255
+
+    with pytest.raises(ValueError, match='datatype'):
+        uniform.plot(volume=True, scalars=scalars)
+
+    scalars = scalars.astype(np.uint8)
+    uniform.plot(volume=True, scalars=scalars)
+
+    pl = pyvista.Plotter()
+    with pytest.warns(UserWarning, match='Ignoring custom opacity'):
+        pl.add_volume(uniform, scalars=scalars, opacity='sigmoid_10')
+    pl.show()
+
+
 def test_color_cycler():
     pyvista.global_theme.color_cycler = 'default'
     pl = pyvista.Plotter()
@@ -3356,6 +3383,24 @@ def test_color_cycler():
         pl.set_color_cycler('foo')
     with pytest.raises(TypeError):
         pl.set_color_cycler(5)
+
+
+def test_plotter_render_callback():
+    n_ren = [0]
+
+    def callback(this_pl):
+        assert isinstance(this_pl, pyvista.Plotter)
+        n_ren[0] += 1
+
+    pl = pyvista.Plotter()
+    pl.add_on_render_callback(callback, render_event=True)
+    assert len(pl._on_render_callbacks) == 0
+    pl.add_on_render_callback(callback, render_event=False)
+    assert len(pl._on_render_callbacks) == 1
+    pl.show()
+    assert n_ren[0] == 1  # if two, render_event not respected
+    pl.clear_on_render_callbacks()
+    assert len(pl._on_render_callbacks) == 0
 
 
 @pytest.mark.parametrize('name', ['default', 'all', 'matplotlib', 'warm'])
