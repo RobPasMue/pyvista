@@ -4,8 +4,8 @@ name: Integration Tests
 on: # zizmor: ignore[cache-poisoning]
   pull_request:
   workflow_dispatch:
-  schedule:
-    - cron: "0 4 * * *"
+  # schedule:
+  #   - cron: "0 4 * * *"
   push:
     tags:
       - "*"
