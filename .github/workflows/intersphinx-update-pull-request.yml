@@ -2,8 +2,8 @@ name: Update Local Intersphinx Mappings
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 3 1 * *"
+  # schedule:
+  #   - cron: "0 3 1 * *"
 
 permissions:
   id-token: none
